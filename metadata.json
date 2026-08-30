@@ -1,0 +1,8 @@
+{
+  "name": "Remix Bairroo",
+  "description": "Seu bairro inteiro em um app. Super app de bairro moderno.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
