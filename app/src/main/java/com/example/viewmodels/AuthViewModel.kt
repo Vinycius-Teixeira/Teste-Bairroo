@@ -53,9 +53,10 @@ class AuthViewModel(private val repository: AuthRepository = AuthRepository()) :
         viewModelScope.launch {
             try {
                 val token = FirebaseMessaging.getInstance().token.await()
+                android.util.Log.d("FCM_DEBUG", "FCM Token obtido para o usuário $userId: $token")
                 repository.saveFcmToken(userId, token)
             } catch (e: Exception) {
-                // Handle error
+                android.util.Log.e("FCM_DEBUG", "Erro ao obter/salvar FCM Token para $userId", e)
             }
         }
     }

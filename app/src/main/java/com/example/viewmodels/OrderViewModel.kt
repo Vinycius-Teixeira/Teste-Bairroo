@@ -44,6 +44,41 @@ class OrderViewModel(private val repository: OrderRepository) : ViewModel() {
         }
     }
 
+
+    val availableOrders: StateFlow<List<StoreOrder>> = repository.getAvailableOrders().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    fun getLiveOrderForDriver(driverId: String): StateFlow<StoreOrder?> {
+        return repository.getLiveOrderForDriver(driverId).stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
+    }
+
+    fun acceptOrderAsDriver(orderId: String, driverId: String) {
+        viewModelScope.launch {
+            repository.assignDriverToOrder(orderId, driverId)
+        }
+    }
+
+    fun updateOrderStatus(orderId: String, newStatus: String) {
+        viewModelScope.launch {
+            repository.updateOrderStatus(orderId, newStatus)
+        }
+    }
+
+    fun getLiveOrdersForCustomer(customerId: String): StateFlow<List<StoreOrder>> {
+        return repository.getLiveOrdersForCustomer(customerId).stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+    }
+
     companion object {
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

@@ -81,6 +81,9 @@ import com.example.screens.auth.CompleteProfileScreenContent
 import com.example.screens.auth.WelcomeScreenContent
 import com.example.screens.PixAccountManagementScreen
 import androidx.compose.foundation.text.BasicTextField
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -340,6 +343,16 @@ fun BairrooApp(
     darkTheme: Boolean,
     onToggleTheme: () -> Unit
 ) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val permissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            android.util.Log.d("FCM_DEBUG", "Permissão POST_NOTIFICATIONS concedida: $isGranted")
+        }
+        LaunchedEffect(Unit) {
+            permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     // --------------------------------------------------------------------------
     // DEV FLAG PARA TESTES RÁPIDOS
     // --------------------------------------------------------------------------
@@ -367,6 +380,12 @@ fun BairrooApp(
     
     val authViewModel: AuthViewModel = viewModel()
     val addresses by authViewModel.addresses.collectAsStateWithLifecycle()
+
+    LaunchedEffect(isLogged, loggedUserId) {
+        if (isLogged && loggedUserId.isNotEmpty()) {
+            authViewModel.updateFcmToken(loggedUserId)
+        }
+    }
 
     // User Directory mutable state (accessible and editable in real-time by Admin!)
     val usersList = remember {
@@ -450,7 +469,7 @@ fun BairrooApp(
     val partnerOrdersState = remember { BairrooOrderRegistry.partnerOrders }
 
     // Customer past orders simulator state (Rodrigo's checkout orders)
-    val customerOrdersState = remember { BairrooOrderRegistry.customerOrders }
+    // REMOVED MOCK, using real flow now. (Will declare below where orderViewModel is)
 
     var activeTab by rememberSaveable { mutableStateOf(ScreenTab.HOME) }
     var selectedRestaurant by remember { mutableStateOf<Restaurant?>(null) }
@@ -462,6 +481,7 @@ fun BairrooApp(
     
     // Order management STATE
     val orderViewModel: OrderViewModel = viewModel(factory = OrderViewModel.Factory)
+    val customerOrdersState by orderViewModel.getLiveOrdersForCustomer(loggedUserId).collectAsStateWithLifecycle()
     
     // Bairroo Mais Points State
     var userPlusPoints by rememberSaveable { mutableStateOf(2250) }
@@ -693,6 +713,8 @@ fun BairrooApp(
             )
         } else if (currentSubExperience == "DRIVER_PANEL" && loggedUserRole == "driver") {
             BairrooDriverPanelScreen(
+                orderViewModel = orderViewModel,
+                loggedDriverId = loggedUserId,
                 onBack = { currentSubExperience = "NONE" }
             )
         } else {
@@ -1385,30 +1407,24 @@ data class MockRide(
 // SCREEN: PAINEL COMPLETO DO ENTREGADOR (MÓDULO 2 & 3)
 // --------------------------------------------------------------------------
 @Composable
-fun BairrooDriverPanelScreen(onBack: () -> Unit) {
+fun BairrooDriverPanelScreen(orderViewModel: com.example.viewmodels.OrderViewModel, loggedDriverId: String, onBack: () -> Unit) {
     val context = LocalContext.current
-    var activeTab by rememberSaveable { mutableStateOf("Início") } // "Início", "Corridas", "Ganhos", "Pedidos", "Mais"
-    val orderViewModel: OrderViewModel = viewModel(factory = OrderViewModel.Factory)
-    val driverId = "driver123" // Assuming a fixed driverId for now
+    var activeTab by rememberSaveable { mutableStateOf("Início") }
+    val driverId = loggedDriverId
+    
+    val availableOrders by orderViewModel.availableOrders.collectAsStateWithLifecycle()
+    val activeOrder by orderViewModel.getLiveOrderForDriver(loggedDriverId).collectAsStateWithLifecycle()
     
     // Online state
     var isOnline by rememberSaveable { mutableStateOf(true) }
     
     // Simulation state for Bairroo Debt
-    var debtBalance by rememberSaveable { mutableStateOf(120.0) } // Starts at R$120.00
+    var debtBalance by rememberSaveable { mutableStateOf(120.0) } 
     
     // Completed metrics
     var totalRidesCount by rememberSaveable { mutableStateOf(300) }
     var todayRidesCount by rememberSaveable { mutableStateOf(6) }
     var todayEarnings by rememberSaveable { mutableStateOf(120.0) }
-    
-    // Available Offer simulation state
-    var hasOffer by rememberSaveable { mutableStateOf(true) }
-    var offerCountdown by rememberSaveable { mutableStateOf(20) }
-    
-    // Active delivery details
-    var activeRideDetail by remember { mutableStateOf<MockRide?>(null) }
-    var activeRideStatus by rememberSaveable { mutableStateOf("NONE") } // "NONE", "ACCEPTED", "ARRIVED", "PICKED_UP", "DELIVERING", "COMPLETED"
     
     // New states for MÓDULO CLIENTE AUSENTE
     var arrivedAtDestinationTime by remember { mutableStateOf<String?>(null) }
@@ -1450,15 +1466,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
         }
     }
 
-    // Run countdown timer for the rides
-    LaunchedEffect(hasOffer, offerCountdown) {
-        if (hasOffer && offerCountdown > 0) {
-            kotlinx.coroutines.delay(1000)
-            offerCountdown--
-        } else if (offerCountdown == 0) {
-            hasOffer = false
-        }
-    }
+
 
     // Debt warning logic according to specifications
     val overLimit200 = debtBalance >= 200.0 && debtBalance < 400.0
@@ -1709,7 +1717,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                         Text("Mude o interruptor acima para ficar online e receber as corridas das lojas.", fontSize = 11.sp, color = Color(0xFF64748B), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                                     }
                                 }
-                            } else if (activeRideDetail != null) {
+                            } else if (activeOrder != null) {
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
@@ -1727,7 +1735,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                         }
                                     }
                                 }
-                            } else if (!hasOffer) {
+                            } else if (availableOrders.isEmpty()) {
                                 Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                                     Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Text("🛰️", fontSize = 32.sp)
@@ -1735,8 +1743,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                         Text("Posicionando-se perto de lojas acelera buscas.", fontSize = 11.sp, color = Color(0xFF64748B))
                                         Button(
                                             onClick = {
-                                                hasOffer = true
-                                                offerCountdown = 20
+                                                // Waiting real orders from Firestore
                                             },
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F532D))
                                         ) {
@@ -1763,7 +1770,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                             }
                                             Surface(color = Color(0xFFEF4444), shape = RoundedCornerShape(12.dp)) {
                                                 Text(
-                                                    text = "${offerCountdown}s",
+                                                    text = "NOVA",
                                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                                     fontSize = 11.sp,
                                                     fontWeight = FontWeight.Bold,
@@ -1794,7 +1801,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
 
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                             OutlinedButton(
-                                                onClick = { hasOffer = false },
+                                                onClick = { /* hasOffer */ },
                                                 modifier = Modifier.weight(1f).height(44.dp),
                                                 shape = RoundedCornerShape(8.dp),
                                                 border = BorderStroke(1.dp, Color(0xFFEF4444))
@@ -1810,19 +1817,8 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                                     waitTimeLeftSeconds = BairrooLogisticsSettings.waitTimeMinutes.value * 60
                                                     notificationLogs.clear()
                                                     isReturningToStore = false
-                                                    activeRideDetail = MockRide(
-                                                        id = "o1",
-                                                        storeName = "Vila Burger",
-                                                        distance = "1.2 km",
-                                                        price = BairrooLogisticsSettings.regularDeliveryFee.value,
-                                                        timeToArrive = "5 min",
-                                                        customerName = "Rodrigo Silva",
-                                                        customerPhone = "(37) 98877-1234",
-                                                        customerAddress = "Avenida Central do Bairro, 1022 - Bloco C",
-                                                        itemsSummary = "1x Vila Burger Clássico + Refrigerante Lata",
-                                                        observations = "Entregar no Bloco C, interfone 302"
-                                                    )
-                                                    activeRideStatus = "ACCEPTED"
+
+                                                    /* activeRideStatus */
                                                     activeTab = "Corridas"
                                                     android.widget.Toast.makeText(context, "Corrida ACEITA! Desloque-se à loja.", android.widget.Toast.LENGTH_SHORT).show()
                                                 },
@@ -1847,7 +1843,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                 .padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            if (activeRideDetail == null) {
+                            if (activeOrder == null) {
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = CardDefaults.cardColors(containerColor = Color.White)
@@ -1869,7 +1865,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                     }
                                 }
                             } else {
-                                val ride = activeRideDetail!!
+                                val ride = activeOrder!!
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -1884,13 +1880,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                             Text("VIAGEM ATIVA", fontWeight = FontWeight.Black, color = Color(0xFF0F532D), fontSize = 12.sp)
                                             Surface(color = Color(0xFFDCFCE7), shape = RoundedCornerShape(8.dp)) {
                                                 Text(
-                                                    text = when (activeRideStatus) {
-                                                        "ACCEPTED" -> "Aceito: Ir até a Loja"
-                                                        "ARRIVED" -> "Chegou: Retirar Pedido"
-                                                        "PICKED_UP" -> "Pacote Coletado!"
-                                                        "DELIVERING" -> "A caminho do Cliente"
-                                                        else -> "Quase Concluído"
-                                                    },
+                                                    text = ride.status,
                                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                                     fontSize = 11.sp,
                                                     fontWeight = FontWeight.Bold,
@@ -1904,8 +1894,8 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                         // Store details
                                         Column {
                                             Text("PONTO DE RETIRADA (ESTABELECIMENTO)", fontSize = 10.sp, fontWeight = FontWeight.Black, color = Color(0xFF64748B))
-                                            Text(ride.storeName, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                            Text("Distância: ${ride.distance}", fontSize = 11.sp, color = Color(0xFF475569))
+                                            Text(ride.restaurantId, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                            Text("Distância: Calcular", fontSize = 11.sp, color = Color(0xFF475569))
                                         }
 
                                         // Delivery target details
@@ -1919,18 +1909,18 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                                 
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Icon(Icons.Default.Phone, null, tint = Color(0xFF1E293B), modifier = Modifier.size(14.dp))
-                                                    Text(ride.customerPhone, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                    Text("(37) 99999-9999", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                                 }
 
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Icon(Icons.Default.DirectionsBike, null, tint = Color(0xFF1E293B), modifier = Modifier.size(14.dp))
-                                                    Text(ride.customerAddress, fontSize = 12.sp)
+                                                    Text("Endereço Cliente", fontSize = 12.sp)
                                                 }
 
                                                 Divider(color = Color.White)
 
                                                 Text("Itens: ${ride.itemsSummary}", fontSize = 11.sp, color = Color(0xFF334155))
-                                                Text("Obs: ${ride.observations}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB45309))
+                                                Text("Obs: ${"Sem observações"}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB45309))
                                             }
                                         }
 
@@ -1943,7 +1933,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                             Row(modifier = Modifier.padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                                 Column {
                                                     Text("PAGAMENTO DIRETO DA LOJA:", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color(0xFF78350F))
-                                                    Text("R$ ${String.format("%.2f", ride.price)}", fontWeight = FontWeight.Black, fontSize = 16.sp, color = Color(0xFFB45309))
+                                                    Text("R$ ${String.format("%.2f", ride.totalPrice)}", fontWeight = FontWeight.Black, fontSize = 16.sp, color = Color(0xFFB45309))
                                                 }
                                                 Text("Método: PIX/Dinheiro", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF78350F))
                                             }
@@ -1952,35 +1942,35 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                         Spacer(modifier = Modifier.height(10.dp))
 
                                         // Sequential buttons
-                                        when (activeRideStatus) {
-                                            "ACCEPTED" -> {
+                                        when (ride.status) {
+                                            "A caminho da loja" -> {
                                                 Button(
-                                                    onClick = { activeRideStatus = "ARRIVED" },
+                                                    onClick = { /* activeRideStatus */ },
                                                     modifier = Modifier.fillMaxWidth().height(48.dp),
                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F532D))
                                                 ) {
                                                     Text("Cheguei no Estabelecimento", fontWeight = FontWeight.Bold)
                                                 }
                                             }
-                                            "ARRIVED" -> {
+                                            "Na loja" -> {
                                                 Button(
-                                                    onClick = { activeRideStatus = "PICKED_UP" },
+                                                    onClick = { /* activeRideStatus */ },
                                                     modifier = Modifier.fillMaxWidth().height(48.dp),
                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F532D))
                                                 ) {
                                                     Text("Retirei o Pedido", fontWeight = FontWeight.Bold)
                                                 }
                                             }
-                                            "PICKED_UP" -> {
+                                            "A caminho do cliente" -> {
                                                 Button(
-                                                    onClick = { activeRideStatus = "DELIVERING" },
+                                                    onClick = { /* activeRideStatus */ },
                                                     modifier = Modifier.fillMaxWidth().height(48.dp),
                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
                                                 ) {
                                                     Text("Iniciei a Rota de Entrega", fontWeight = FontWeight.Bold)
                                                 }
                                             }
-                                            "DELIVERING" -> {
+                                            "No destino" -> {
                                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                                     if (arrivedAtDestinationTime == null) {
                                                         // Update: arrived at destination
@@ -2016,7 +2006,7 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                                         if (!isWaitingSimulated && !isReturningToStore) {
                                                             // Give option for successful delivery OR client absent
                                                             Button(
-                                                                onClick = { activeRideStatus = "COMPLETED" },
+                                                                onClick = { /* activeRideStatus */ },
                                                                 modifier = Modifier.fillMaxWidth().height(48.dp),
                                                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
                                                             ) {
@@ -2122,22 +2112,22 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                                                             BairrooOrderRegistry.updateStatus(ride.id, "Devolvido para Loja")
                                                                             
                                                                             // 2. Deliver gets paid as normal (o entregador mantem a remuneracao)
-                                                                            val cut = ride.price * 0.15
+                                                                            val cut = ride.totalPrice * 0.15
                                                                             debtBalance += cut
                                                                             todayRidesCount += 1
                                                                             totalRidesCount += 1
-                                                                            todayEarnings += ride.price
+                                                                            todayEarnings += ride.totalPrice
                                                                             
                                                                             // 3. Clear active ride
-                                                                            activeRideDetail = null
-                                                                            activeRideStatus = "NONE"
-                                                                            hasOffer = false
+                                                                            /* activeRideDetail null */
+                                                                            /* activeRideStatus */
+                                                                            /* hasOffer */
                                                                             isReturningToStore = false
                                                                             arrivedAtDestinationTime = null
                                                                             arrivedAtDestinationLoc = null
                                                                             isWaitingSimulated = false
                                                                             activeTab = "Início"
-                                                                            android.widget.Toast.makeText(context, "Devolução Confirmada! Sua remuneração de R$ ${String.format("%.2f", ride.price)} foi mantida.", android.widget.Toast.LENGTH_LONG).show()
+                                                                            android.widget.Toast.makeText(context, "Devolução Confirmada! Sua remuneração de R$ ${String.format("%.2f", ride.totalPrice)} foi mantida.", android.widget.Toast.LENGTH_LONG).show()
                                                                         },
                                                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF15803D)),
                                                                         modifier = Modifier.fillMaxWidth().height(48.dp)
@@ -2150,24 +2140,24 @@ fun BairrooDriverPanelScreen(onBack: () -> Unit) {
                                                     }
                                                 }
                                             }
-                                            "COMPLETED" -> {
+                                            "Entregue" -> {
                                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                                     Text("Confirmar Conclusão da Corrira:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                                    Text("Certifique-se de que a loja pagou o valor de R$ ${String.format("%.2f", ride.price)} diretamente em suas mãos antes de concluir.", fontSize = 11.sp, color = Color(0xFF64748B))
+                                                    Text("Certifique-se de que a loja pagou o valor de R$ ${String.format("%.2f", ride.totalPrice)} diretamente em suas mãos antes de concluir.", fontSize = 11.sp, color = Color(0xFF64748B))
                                                     
                                                     Button(
                                                         onClick = {
                                                             // Calculate commission fee to hold in Bairroo debt balance (e.g. 15%)
-                                                            val cut = ride.price * 0.15
+                                                            val cut = ride.totalPrice * 0.15
                                                             debtBalance += cut
                                                             todayRidesCount += 1
                                                             totalRidesCount += 1
-                                                            todayEarnings += ride.price
+                                                            todayEarnings += ride.totalPrice
                                                             
                                                             // Clear active ride
-                                                            activeRideDetail = null
-                                                            activeRideStatus = "NONE"
-                                                            hasOffer = false
+                                                            /* activeRideDetail null */
+                                                            /* activeRideStatus */
+                                                            /* hasOffer */
                                                             activeTab = "Início"
                                                             android.widget.Toast.makeText(context, "Corrida Concluída! Ganhos atualizados.", android.widget.Toast.LENGTH_LONG).show()
                                                         },

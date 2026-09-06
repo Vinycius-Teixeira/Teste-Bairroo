@@ -28,6 +28,8 @@ import androidx.compose.animation.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.viewmodels.OrderViewModel
 import com.example.*
 // --------------------------------------------------------------------------
 // SCREEN 5: PAINEL ENTREGADOR (Interactive order simulator)
@@ -41,12 +43,14 @@ fun DriverDashboardContent(
     onToggleOnline: (Boolean) -> Unit,
     earnings: Double,
     deliveriesCount: Int,
-    activeOffer: Boolean,
-    deliveryState: String,
-    routeProgress: Float,
-    onAcceptOffer: () -> Unit,
-    onDeclineOffer: () -> Unit
+    loggedDriverId: String,
+    orderViewModel: OrderViewModel
 ) {
+    val availableOrders by orderViewModel.availableOrders.collectAsStateWithLifecycle()
+    val activeOrder by orderViewModel.getLiveOrderForDriver(loggedDriverId).collectAsStateWithLifecycle()
+    val activeOffer = availableOrders.isNotEmpty() && activeOrder == null
+    val deliveryState = activeOrder?.status ?: "NONE"
+    val routeProgress = if (deliveryState != "NONE") 0.5f else 0f
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -185,7 +189,7 @@ fun DriverDashboardContent(
 
         // Animated Popup Card for Active Delivery proposal
         AnimatedVisibility(
-            visible = activeOffer && isOnline,
+            visible = activeOffer && isOnline && availableOrders.isNotEmpty(),
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
             modifier = Modifier
@@ -227,11 +231,11 @@ fun DriverDashboardContent(
                     Spacer(modifier = Modifier.height(8.dp))
                     
                     Text(
-                        "Pizzaria do Bairro • 1.2 km de distância",
+                        "Loja: ${availableOrders.firstOrNull()?.restaurantId ?: ""}",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
                     Text(
-                        "Retirada: Centro • Destino: Rua das Flores, 123",
+                        "Cliente: ${availableOrders.firstOrNull()?.customerName ?: ""}",
                         style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF6B7280))
                     )
                     
@@ -242,14 +246,14 @@ fun DriverDashboardContent(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         OutlinedButton(
-                            onClick = onDeclineOffer,
+                            onClick = { /* Recusar action here */ },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text("Recusar", color = Color(0xFF6B7280), style = TextStyle(fontWeight = FontWeight.Bold))
                         }
                         Button(
-                            onClick = onAcceptOffer,
+                            onClick = { orderViewModel.acceptOrderAsDriver(availableOrders.first().id, loggedDriverId) },
                             modifier = Modifier.weight(1.3f),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF22C55E))

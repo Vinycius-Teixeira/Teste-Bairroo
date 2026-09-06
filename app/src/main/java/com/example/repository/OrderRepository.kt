@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
 class OrderRepository(private val firestore: FirebaseFirestore) {
-
     private val orders = mutableListOf<StoreOrder>()
     private val walletRepository = WalletRepository()
     private val adminSettingsRepository = AdminSettingsRepository()
@@ -28,7 +27,6 @@ class OrderRepository(private val firestore: FirebaseFirestore) {
                     trySend(firestoreOrders).isSuccess
                 }
             }
-
         awaitClose {
             listenerRegistration.remove()
         }
@@ -53,22 +51,17 @@ class OrderRepository(private val firestore: FirebaseFirestore) {
     }
 
     suspend fun acceptOrder(orderId: String, driverId: String): Boolean {
-        // 1. Get settings
         val settings = adminSettingsRepository.getSettings()
-        // 2. Get wallet
         val wallet = walletRepository.getWallet(driverId) ?: return false
         
-        // 3. Check balance
         if (wallet.balance < settings.minBalanceToAcceptOrders) {
             return false
         }
         
-        // 4. Deduct fee
         val success = walletRepository.processTransaction(
             driverId, -settings.feePerDelivery, "Deduction", orderId, "Taxa por entrega"
         )
         
-        // 5. Update order status
         if (success) {
             val order = orders.find { it.id == orderId }
             if (order != null) {
@@ -83,6 +76,74 @@ class OrderRepository(private val firestore: FirebaseFirestore) {
         val index = orders.indexOfFirst { it.id == order.id }
         if (index != -1) {
             orders[index] = order
+        }
+    }
+
+    fun getAvailableOrders(): Flow<List<StoreOrder>> = callbackFlow {
+        val listenerRegistration = firestore.collection("orders")
+            .whereEqualTo("status", "Aguardando Entregador")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val firestoreOrders = snapshot.documents.mapNotNull { it.toObject(StoreOrder::class.java) }
+                    trySend(firestoreOrders).isSuccess
+                }
+            }
+        awaitClose {
+            listenerRegistration.remove()
+        }
+    }
+
+    fun getLiveOrderForDriver(driverId: String): Flow<StoreOrder?> = callbackFlow {
+        val listenerRegistration = firestore.collection("orders")
+            .whereEqualTo("driverId", driverId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val firestoreOrders = snapshot.documents.mapNotNull { it.toObject(StoreOrder::class.java) }
+                    val activeOrder = firestoreOrders.firstOrNull { it.status != "Entregue" && it.status != "Cancelado" }
+                    trySend(activeOrder).isSuccess
+                }
+            }
+        awaitClose {
+            listenerRegistration.remove()
+        }
+    }
+
+    suspend fun assignDriverToOrder(orderId: String, driverId: String) {
+        firestore.collection("orders").document(orderId).update(
+            mapOf(
+                "driverId" to driverId,
+                "status" to "A caminho da loja"
+            )
+        ).await()
+    }
+
+    suspend fun updateOrderStatus(orderId: String, newStatus: String) {
+        firestore.collection("orders").document(orderId).update("status", newStatus).await()
+    }
+
+    fun getLiveOrdersForCustomer(customerId: String): Flow<List<StoreOrder>> = callbackFlow {
+        val listenerRegistration = firestore.collection("orders")
+            .whereEqualTo("customerId", customerId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val firestoreOrders = snapshot.documents.mapNotNull { it.toObject(StoreOrder::class.java) }
+                    trySend(firestoreOrders).isSuccess
+                }
+            }
+        awaitClose {
+            listenerRegistration.remove()
         }
     }
 
